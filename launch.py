@@ -24,7 +24,7 @@ def print_common_words():
     to_print = list()
     
     for i in range(50):
-        to_print.append(frequencies[i][0])
+        to_print.append(common_words[i])
     print("50 most common words:")
     print(to_print)
     # for word, freq in common_words:

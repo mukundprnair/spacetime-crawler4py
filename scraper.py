@@ -33,7 +33,7 @@ def normalize_url(url):
 
 # Check if the URL has invalid extensions
 def has_invalid_extension(url):
-    invalid_extensions = r".*\.(txt|css|js|bmp|gif|jpe?g|ico|png|tiff?|mid|mp2|mp3|mp4|wav|avi|mov|mpeg|ram|m4v|mkv|ogg|ogv|pdf|ps|eps|tex|ppt|pptx|doc|docx|xls|xlsx|names|data|dat|exe|bz2|tar|msi|bin|7z|psd|dmg|iso|epub|dll|cnf|tgz|sha1|thmx|mso|arff|rtf|jar|csv|rm|smil|wmv|swf|wma|zip|rar|gz)$"
+    invalid_extensions = r".*\.(txt|php|htm|bam|bed|css|js|bmp|gif|jpe?g|ico|png|tiff?|mid|mp2|mp3|mp4|wav|avi|mov|mpeg|ram|m4v|mkv|ogg|ogv|pdf|ps|eps|tex|ppt|pptx|doc|docx|xls|xlsx|names|data|dat|exe|bz2|tar|msi|bin|7z|psd|dmg|iso|epub|dll|cnf|tgz|sha1|thmx|mso|arff|rtf|jar|csv|rm|smil|wmv|swf|wma|zip|rar|gz)$"
     return re.match(invalid_extensions, url.lower()) is not None
 
 # URL validation
@@ -73,21 +73,15 @@ def extract_next_links(url, resp):
                 if not has_invalid_extension(absolute_link):  # Validate link
                     extracted_links.add(absolute_link)
 
-        # Links from <link> tags
-        for link_tag in soup.find_all('link', href=True):
-            href = link_tag['href']
-            if href:
-                absolute_link = normalize_url(urljoin(url, urldefrag(href).url))
-                if not has_invalid_extension(absolute_link):
-                    extracted_links.add(absolute_link)
+        # # # Links from <link> tags
+        # # for link_tag in soup.find_all('link', href=True):
+        # #     href = link_tag['href']
+        # #     if href:
+        # #         absolute_link = normalize_url(urljoin(url, urldefrag(href).url))
+        # #         if not has_invalid_extension(absolute_link):
+        # #             extracted_links.add(absolute_link)
 
-        # Links from <script> tags
-        for script_tag in soup.find_all('script', src=True):
-            src = script_tag['src']
-            if src:
-                absolute_link = normalize_url(urljoin(url, urldefrag(src).url))
-                if not has_invalid_extension(absolute_link):
-                    extracted_links.add(absolute_link)
+        
 
     return [link for link in extracted_links if is_valid(link)]
 
@@ -97,17 +91,38 @@ def generate_hash(text):
 
 # Functions for trap detection
 redirect_tracker = defaultdict(int)
-
 def is_infinite_redirect(url):
     redirect_tracker[url] += 1
     return redirect_tracker[url] > 2  # Redirect limit to avoid traps
 
+# gets the url up to the second path
+def get_url_up_to_second_path(url):
+    parsed_url = urlparse(url)
+    base_url = parsed_url.scheme + '://' + parsed_url.netloc
+    path_segments = parsed_url.path.strip('/').split('/')
+    if len(path_segments) >= 2:
+        path_segments = path_segments[:2]
+    path = '/'.join(path_segments)
+    if len(path) == 0:
+        final_url = base_url
+    else:
+        final_url = base_url + '/' + path
+    return final_url
+
+
 url_revisit_tracker = defaultdict(list)
-
-def is_infinite_trap(url, revisit_threshold=10, time_window=60):
+# if a url is never visited twice, and this function is only called with unique urls, im not sure if this would ever work becuase no url would have more than 1 item in its associated list
+def is_infinite_trap(url, revisit_threshold=15, time_window=60):
     current_time = time.time()
+    old_url = url
+    url = get_url_up_to_second_path(url)  # added this line to keep url up to second path
     url_revisit_tracker[url].append(current_time)
-
+    
+    # calendar detection
+    if re.search(r'/\d{4}-\d{2}-\d{2}', url):
+        print("skipping in calendar")
+        return True
+        
     # Remove old entries outside the time window
     url_revisit_tracker[url] = [
         t for t in url_revisit_tracker[url] if (current_time - t) < time_window
@@ -117,8 +132,15 @@ def is_infinite_trap(url, revisit_threshold=10, time_window=60):
 
 def has_recursive_pattern(url):
     parsed = urlparse(url)
-    path_segments = parsed.path.split("/")
-    return len(set(path_segments)) < len(path_segments)
+    path_segments = [segment for segment in parsed.path.strip('/').split('/') if segment]
+    
+    #Set to detect recursive patterns
+    seen = set()
+    for segment in path_segments:
+        if segment in seen:
+            return True  
+        seen.add(segment)
+    return False
 
 def has_too_many_query_parameters(url, max_parameters=5):
     parsed = urlparse(url)
@@ -146,11 +168,17 @@ def scraper(url, resp):
         return []
 
     # Handle infinite traps
-    if is_infinite_trap(normalized_url) or is_infinite_redirect(normalized_url):
+    if is_infinite_trap(normalized_url):
+        print("Skipping in infinite trap")
+        return []
+    
+    if is_infinite_redirect(normalized_url):
+        print("Skipping in infinite redirect")
         return []
 
     # Handle large files and non-textual content
     if is_large_file(resp):
+        print("Skipping in large file")
         return []  # Avoid large files
 
     # Avoid revisits and add to visited URLs
@@ -161,6 +189,12 @@ def scraper(url, resp):
 
         # Detect and avoid dead URLs with no content
         page_text = soup.get_text(separator="\n")
+
+        # skip if low information value; ie fewer than 500 characters
+        if len(page_text) < 500:
+            print("skipping because of low information value")
+            return []
+        
         if not page_text.strip():
             return []
 
@@ -198,4 +232,5 @@ def scraper(url, resp):
 
         return [link for link in links if is_valid(link)]  # Return valid links
 
+    print("status code was", resp.status)
     return []  # Default return for non-200 status codes
